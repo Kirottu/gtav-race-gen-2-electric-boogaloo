@@ -491,13 +491,6 @@ impl RuntimeData {
                 }
 
                 ui.horizontal(|ui| {
-                    if ui.button("Export map").clicked() {
-                        let image = self.race_image(self.race.as_ref().unwrap());
-
-                        let path = rfd::FileDialog::new().save_file().unwrap();
-
-                        image.export_png(&path.as_path().to_string_lossy());
-                    }
                     if ui.button("Copy map to clipboard").clicked() {
                         let image = self.race_image(self.race.as_ref().unwrap());
 
@@ -631,18 +624,7 @@ impl RuntimeData {
 
         set_default_camera();
 
-        let mut image = render_target.texture.get_texture_data();
-
-        let flipped = image
-            .get_image_data()
-            .chunks(image.width())
-            .rev()
-            .flatten()
-            .cloned()
-            .collect::<Vec<_>>();
-
-        image.get_image_data_mut().copy_from_slice(&flipped);
-        image
+        render_target.texture.get_texture_data()
     }
 
     fn generate_race(&self, mut race_gen: RaceGen) -> Race {
