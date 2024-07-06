@@ -8,10 +8,10 @@ use egui_macroquad::egui;
 use macroquad::{prelude::*, rand::ChooseRandom};
 use serde::{Deserialize, Serialize};
 
-const CIRCLE_RADIUS: f32 = 20.0;
+const CIRCLE_RADIUS: f32 = 30.0;
 const CIRCLE_THICKNESS: f32 = 5.0;
 const LINE_THICKNESS: f32 = 7.0;
-const TEXT_SIZE: f32 = 50.0;
+const TEXT_SIZE: f32 = 100.0;
 
 const DEFAULT_POINTS: &[Point] = &[
     Point { x: 580., y: 352. },
@@ -112,14 +112,12 @@ impl State {
     }
 }
 
+#[derive(Clone)]
 struct RaceState {
-    inner: RaceStateInner,
+    length: usize,
+    n_tryhisuojaus: usize,
+    classes: Vec<String>,
     edit_controls_collapsed: bool,
-}
-
-enum RaceStateInner {
-    Gen(RaceGen),
-    Tweak,
 }
 
 enum TweakAction {
@@ -132,19 +130,13 @@ enum TweakAction {
     AddTs(usize),
 }
 
-#[derive(Clone)]
-struct RaceGen {
-    length: usize,
-    n_tryhisuojaus: usize,
-    classes: Vec<String>,
-}
-
-impl Default for RaceGen {
+impl Default for RaceState {
     fn default() -> Self {
         Self {
             length: 0,
             n_tryhisuojaus: 0,
             classes: vec!["".to_string(); 10],
+            edit_controls_collapsed: false,
         }
     }
 }
@@ -164,7 +156,7 @@ impl Default for Config {
 
 struct Race {
     // Indices of existing checkpoints
-    checkpoints: Vec<(Point, String)>,
+    checkpoints: Vec<(Point, Option<String>)>,
     tryhisuojaus: Vec<(usize, Point)>,
 }
 
@@ -172,6 +164,7 @@ struct RuntimeData {
     state: State,
     config: Config,
     font: Font,
+    font_outline: Font,
     gtav_map: Texture2D,
     race: Option<Race>,
     config_path: String,
@@ -282,28 +275,36 @@ impl RuntimeData {
                 RED,
             );
 
-            draw_text_ex(
+            self.draw_bold_text(
                 &format!("{}", i + 1),
-                scaled.x + 20.0,
+                scaled.x + 20.0 * scale_factor,
                 scaled.y,
-                TextParams {
-                    font: self.font,
-                    font_size: (TEXT_SIZE * scale_factor) as u16,
-                    color: RED,
-                    ..Default::default()
-                },
+                (TEXT_SIZE * scale_factor) as u16,
+                WHITE,
+                BLACK,
             );
-            draw_text_ex(
-                class,
-                scaled.x + 20.0,
-                scaled.y + 30.0,
-                TextParams {
-                    font: self.font,
-                    font_size: (TEXT_SIZE * scale_factor) as u16,
-                    color: RED,
-                    ..Default::default()
-                },
-            );
+            match class {
+                Some(class) => {
+                    self.draw_bold_text(
+                        class,
+                        scaled.x + 20.0 * scale_factor,
+                        scaled.y + 70.0 * scale_factor,
+                        (TEXT_SIZE * scale_factor) as u16,
+                        WHITE,
+                        BLACK,
+                    );
+                }
+                None => {
+                    self.draw_bold_text(
+                        "Goal",
+                        scaled.x + 20.0 * scale_factor,
+                        scaled.y + 70.0 * scale_factor,
+                        (TEXT_SIZE * scale_factor) as u16,
+                        WHITE,
+                        BLACK,
+                    );
+                }
+            }
 
             last_point = Some(scaled);
         }
@@ -365,16 +366,13 @@ impl RuntimeData {
                 Color::from_rgba(0, 0, 255, 100),
             );
 
-            draw_text_ex(
+            self.draw_bold_text(
                 &format!("{}", i + 1),
                 scaled.x + 20.0,
                 scaled.y + TEXT_SIZE * scale_factor / 2.0,
-                TextParams {
-                    font: self.font,
-                    font_size: (TEXT_SIZE * scale_factor) as u16,
-                    color: Color::from_rgba(0, 0, 255, 255),
-                    ..Default::default()
-                },
+                (TEXT_SIZE * scale_factor) as u16,
+                Color::from_rgba(0, 0, 255, 255),
+                WHITE,
             );
         }
     }
@@ -384,18 +382,17 @@ impl RuntimeData {
         ui.separator();
 
         match &mut self.state {
-            State::Race(RaceState {
-                inner: RaceStateInner::Gen(race_gen),
-                edit_controls_collapsed,
-            }) => {
-                if !*edit_controls_collapsed {
+            State::Race(race_state) => {
+                let mut tweak_action = None;
+
+                if !race_state.edit_controls_collapsed {
                     ui.add(
-                        egui::Slider::new(&mut race_gen.length, 0..=10)
+                        egui::Slider::new(&mut race_state.length, 0..=10)
                             .show_value(true)
                             .text("Race length"),
                     );
                     ui.add(
-                        egui::Slider::new(&mut race_gen.n_tryhisuojaus, 0..=4)
+                        egui::Slider::new(&mut race_state.n_tryhisuojaus, 0..=4)
                             .show_value(true)
                             .text("Tryhisuojaus checkpoints"),
                     );
@@ -404,120 +401,103 @@ impl RuntimeData {
 
                     ui.label("Classes");
 
-                    for i in 0..race_gen.length {
-                        ui.text_edit_singleline(&mut race_gen.classes[i]);
+                    if race_state.length > 0 {
+                        for i in 0..(race_state.length - 1) {
+                            ui.text_edit_singleline(&mut race_state.classes[i]);
+                        }
                     }
-
                     ui.separator();
+
+                    if let Some(race) = &mut self.race {
+                        ui.label("Checkpoints");
+                        for (i, (_, class)) in race.checkpoints.iter_mut().enumerate() {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("{}: ", i + 1));
+                                match class {
+                                    Some(class) => {
+                                        ui.text_edit_singleline(class);
+                                    }
+                                    None => {
+                                        ui.label("Goal");
+                                    }
+                                }
+                                if ui.button("Reroll").clicked() {
+                                    tweak_action = Some(TweakAction::Reroll(i));
+                                }
+                                if ui.button("Delete").clicked() {
+                                    tweak_action = Some(TweakAction::Delete(i));
+                                }
+                                if ui.button("Add new point").clicked() {
+                                    tweak_action = Some(TweakAction::Add(i));
+                                }
+                                if ui.button("Add tryhisuojaus").clicked() {
+                                    tweak_action = Some(TweakAction::AddTs(i));
+                                }
+                            });
+                        }
+
+                        ui.separator();
+                        ui.label("Tryhisuojaus checkpoints");
+
+                        for (i, (index, _)) in
+                            self.race.as_ref().unwrap().tryhisuojaus.iter().enumerate()
+                        {
+                            ui.horizontal(|ui| {
+                                ui.label(format!(
+                                    "{}: Checkpoints {}-{}",
+                                    i + 1,
+                                    index + 1,
+                                    index + 2,
+                                ));
+                                if ui.button("Reroll point").clicked() {
+                                    tweak_action = Some(TweakAction::RerollTsPoint(i));
+                                }
+                                if ui.button("Reroll everything").clicked() {
+                                    tweak_action = Some(TweakAction::RerollTs(i));
+                                }
+                                if ui.button("Delete").clicked() {
+                                    tweak_action = Some(TweakAction::DeleteTs(i));
+                                }
+                            });
+                        }
+                        ui.separator();
+                    }
                 }
 
-                if race_gen.length > 1 {
-                    let race_gen = race_gen.clone();
+                if race_state.length > 1 {
+                    let race_state = race_state.clone();
                     ui.horizontal(|ui| {
                         if ui.button("Generate race").clicked() {
-                            self.race = Some(self.generate_race(race_gen))
+                            self.race = Some(self.generate_race(race_state))
                         }
-                        if self.race.is_some() && ui.button("Tweak the race").clicked() {
-                            self.state = State::Race(RaceState {
-                                inner: RaceStateInner::Tweak,
-                                edit_controls_collapsed: false,
-                            });
+                        if self.race.is_some() && ui.button("Copy map to clipboard").clicked() {
+                            let image = self.race_image(self.race.as_ref().unwrap());
+
+                            self.clipboard
+                                .set_image(arboard::ImageData {
+                                    width: image.width(),
+                                    height: image.height(),
+                                    bytes: Cow::from_iter(
+                                        image.get_image_data().iter().flatten().cloned(),
+                                    ),
+                                })
+                                .unwrap();
                         }
                         if ui.button("Toggle edit controls").clicked() {
                             self.state.toggle_edit_controls();
                         }
                     });
                 }
-            }
-            State::Race(RaceState {
-                inner: RaceStateInner::Tweak,
-                edit_controls_collapsed,
-            }) => {
-                let mut tweak_action = None;
-                if !*edit_controls_collapsed {
-                    ui.label("Checkpoints");
-
-                    for (i, (_, class)) in self
-                        .race
-                        .as_mut()
-                        .unwrap()
-                        .checkpoints
-                        .iter_mut()
-                        .enumerate()
-                    {
-                        ui.horizontal(|ui| {
-                            ui.label(format!("{}: ", i + 1));
-                            ui.text_edit_singleline(class);
-                            if ui.button("Reroll").clicked() {
-                                tweak_action = Some(TweakAction::Reroll(i));
-                            }
-                            if ui.button("Delete").clicked() {
-                                tweak_action = Some(TweakAction::Delete(i));
-                            }
-                            if ui.button("Add new point").clicked() {
-                                tweak_action = Some(TweakAction::Add(i));
-                            }
-                            if ui.button("Add tryhisuojaus").clicked() {
-                                tweak_action = Some(TweakAction::AddTs(i));
-                            }
-                        });
-                    }
-
-                    ui.separator();
-                    ui.label("Tryhisuojaus checkpoints");
-
-                    for (i, (index, _)) in
-                        self.race.as_ref().unwrap().tryhisuojaus.iter().enumerate()
-                    {
-                        ui.horizontal(|ui| {
-                            ui.label(format!(
-                                "{}: Checkpoints {}-{}",
-                                i + 1,
-                                index + 1,
-                                index + 2,
-                            ));
-                            if ui.button("Reroll point").clicked() {
-                                tweak_action = Some(TweakAction::RerollTsPoint(i));
-                            }
-                            if ui.button("Reroll everything").clicked() {
-                                tweak_action = Some(TweakAction::RerollTs(i));
-                            }
-                            if ui.button("Delete").clicked() {
-                                tweak_action = Some(TweakAction::DeleteTs(i));
-                            }
-                        });
-                    }
-                    ui.separator();
-                }
-
-                ui.horizontal(|ui| {
-                    if ui.button("Copy map to clipboard").clicked() {
-                        let image = self.race_image(self.race.as_ref().unwrap());
-
-                        self.clipboard
-                            .set_image(arboard::ImageData {
-                                width: image.width(),
-                                height: image.height(),
-                                bytes: Cow::from_iter(
-                                    image.get_image_data().iter().flatten().cloned(),
-                                ),
-                            })
-                            .unwrap();
-                    }
-                    if ui.button("Back").clicked() {
-                        self.state = State::Race(RaceState {
-                            inner: RaceStateInner::Gen(RaceGen::default()),
-                            edit_controls_collapsed: false,
-                        });
-                    }
-                    if ui.button("Toggle edit controls").clicked() {
-                        self.state.toggle_edit_controls();
-                    }
-                });
-
                 match tweak_action {
                     Some(TweakAction::Delete(i)) => {
                         self.race.as_mut().unwrap().checkpoints.remove(i);
+                        self.race
+                            .as_mut()
+                            .unwrap()
+                            .checkpoints
+                            .last_mut()
+                            .unwrap()
+                            .1 = None;
                     }
                     Some(TweakAction::Reroll(i)) => {
                         self.race
@@ -534,7 +514,15 @@ impl RuntimeData {
                             .as_mut()
                             .unwrap()
                             .checkpoints
-                            .insert(i + 1, (point, String::new()));
+                            .insert(i + 1, (point, Some(String::new())));
+
+                        self.race
+                            .as_mut()
+                            .unwrap()
+                            .checkpoints
+                            .last_mut()
+                            .unwrap()
+                            .1 = None;
                     }
                     Some(TweakAction::DeleteTs(i)) => {
                         self.race.as_mut().unwrap().tryhisuojaus.remove(i);
@@ -592,10 +580,7 @@ impl RuntimeData {
             State::Idle => {
                 ui.horizontal(|ui| {
                     if ui.button("Create a new race").clicked() {
-                        self.state = State::Race(RaceState {
-                            inner: RaceStateInner::Gen(RaceGen::default()),
-                            edit_controls_collapsed: false,
-                        });
+                        self.state = State::Race(RaceState::default());
                     }
                     if ui.button("Configure checkpoints").clicked() {
                         self.state = State::Config(self.config.race_points.clone());
@@ -627,25 +612,33 @@ impl RuntimeData {
         render_target.texture.get_texture_data()
     }
 
-    fn generate_race(&self, mut race_gen: RaceGen) -> Race {
+    fn generate_race(&self, mut race_state: RaceState) -> Race {
         let mut race_points = self.config.race_points.clone();
         race_points.shuffle();
 
-        let points = &race_points[0..race_gen.length];
+        let points = &race_points[0..race_state.length];
         let tryhisuojaus =
-            &race_points[race_gen.length..(race_gen.length + race_gen.n_tryhisuojaus)];
+            &race_points[race_state.length..(race_state.length + race_state.n_tryhisuojaus)];
 
-        race_gen.classes.truncate(race_gen.length);
-        race_gen.classes.shuffle();
+        race_state.classes.truncate(race_state.length - 1);
+        race_state.classes.shuffle();
 
         let mut tryhisuojaus = tryhisuojaus
             .iter()
-            .map(|point| (rand::gen_range(0, race_gen.length - 2), *point))
+            .map(|point| (rand::gen_range(0, race_state.length - 2), *point))
             .collect::<Vec<_>>();
         tryhisuojaus.sort_by(|(a, _), (b, _)| a.cmp(b));
 
         Race {
-            checkpoints: points.iter().copied().zip(race_gen.classes).collect(),
+            checkpoints: points
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(i, point)| match race_state.classes.get(i) {
+                    Some(class) => (point, Some(class.clone())),
+                    None => (point, None),
+                })
+                .collect(),
             tryhisuojaus,
         }
     }
@@ -669,11 +662,46 @@ impl RuntimeData {
             .choose()
             .unwrap()
     }
+
+    fn draw_bold_text(
+        &self,
+        text: &str,
+        x: f32,
+        y: f32,
+        font_size: u16,
+        color: Color,
+        outline: Color,
+    ) {
+        draw_text_ex(
+            text,
+            x,
+            y,
+            TextParams {
+                font: self.font,
+                font_size,
+                color,
+                ..Default::default()
+            },
+        );
+        draw_text_ex(
+            text,
+            x,
+            y,
+            TextParams {
+                font: self.font_outline,
+                font_size,
+                color: outline,
+                ..Default::default()
+            },
+        );
+    }
 }
 
 #[macroquad::main("GTAV Race Gen 2: Electric Boogaloo")]
 async fn main() {
-    let font = load_ttf_font_from_bytes(include_bytes!("../res/Hack-Regular.ttf")).unwrap();
+    let font = load_ttf_font_from_bytes(include_bytes!("../res/VisiaPro-Bold.ttf")).unwrap();
+    let font_outline =
+        load_ttf_font_from_bytes(include_bytes!("../res/VisiaPro-BoldOutline.ttf")).unwrap();
     let gtav_map = load_texture("assets/gtav-map2.png").await.unwrap();
     let state = State::Idle;
     let race: Option<Race> = None;
@@ -689,6 +717,7 @@ async fn main() {
         state,
         config,
         font,
+        font_outline,
         gtav_map,
         race,
         config_path,
